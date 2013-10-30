@@ -71,7 +71,7 @@ module.exports = resumable = function(temporaryFolder){
 
     if(validateRequest(chunkNumber, chunkSize, totalSize, identifier, filename)=='valid') {
       var chunkFilename = getChunkFilename(chunkNumber, identifier);
-      path.exists(chunkFilename, function(exists){
+      fs.exists(chunkFilename, function(exists){
           if(exists){
             callback('found', chunkFilename, filename, identifier);
           } else {
@@ -83,8 +83,8 @@ module.exports = resumable = function(temporaryFolder){
     }
   }
 
-  //'partly_done', filename, original_filename, identifier
-  //'done', filename, original_filename, identifier
+  //'partly_done', filename, original_filename, identifier, chunksReceived, totalNumberOfChunks
+  //'done', filename, original_filename, identifier, chunksReceived, totalNumberOfChunks
   //'invalid_resumable_request', null, null, null
   //'non_resumable_request', null, null, null
   $.post = function(req, callback){
@@ -115,17 +115,17 @@ module.exports = resumable = function(temporaryFolder){
         var currentTestChunk = 1;
         var numberOfChunks = Math.max(Math.floor(totalSize/(chunkSize*1.0)), 1);
         var testChunkExists = function(){
-              path.exists(getChunkFilename(currentTestChunk, identifier), function(exists){
+              fs.exists(getChunkFilename(currentTestChunk, identifier), function(exists){
                 if(exists){
                   currentTestChunk++;
                   if(currentTestChunk>numberOfChunks) {
-                    callback('done', filename, original_filename, identifier);
+                    callback('done', filename, original_filename, identifier, (currentTestChunk -1), numberOfChunks);
                   } else {
                     // Recursion
                     testChunkExists();
                   }
                 } else {
-                  callback('partly_done', filename, original_filename, identifier);
+                  callback('partly_done', filename, original_filename, identifier, (currentTestChunk -1), numberOfChunks);
                 }
               });
             }
@@ -153,7 +153,7 @@ module.exports = resumable = function(temporaryFolder){
       var pipeChunk = function(number) {
 
           var chunkFilename = getChunkFilename(number, identifier);
-          path.exists(chunkFilename, function(exists) {
+          fs.exists(chunkFilename, function(exists) {
 
               if (exists) {
                   // If the chunk with the current number exists,
@@ -188,7 +188,7 @@ module.exports = resumable = function(temporaryFolder){
           var chunkFilename = getChunkFilename(number, identifier);
 
           //console.log('removing pipeChunkRm ', number, 'chunkFilename', chunkFilename);
-          path.exists(chunkFilename, function(exists) {
+          fs.exists(chunkFilename, function(exists) {
               if (exists) {
 
                   console.log('exist removing ', chunkFilename);

@@ -1,29 +1,37 @@
-var fs = require('fs'), path = require('path'), util = require('util'), Stream = require('stream').Stream;
-
-
+var fs = require('fs'),
+  path = require('path'),
+  util = require('util'),
+  Stream = require('stream').Stream;
 
 module.exports = resumable = function(temporaryFolder){
+  
+  // Self reference
   var $ = this;
+
+  // Public properties
   $.temporaryFolder = temporaryFolder;
   $.maxFileSize = null;
   $.fileParameterName = 'file';
+  $.fileTracker = {};
 
+  // Create temporary folder if it doesn't exist
   try {
     fs.mkdirSync($.temporaryFolder);
   }catch(e){}
 
-
+  // Remove special characters to create identifier
   var cleanIdentifier = function(identifier){
     return identifier.replace(/^0-9A-Za-z_-/img, '');
   }
 
+  // Determine file name from chunk number and unique id
   var getChunkFilename = function(chunkNumber, identifier){
     // Clean up the identifier
     identifier = cleanIdentifier(identifier);
     // What would the file name be?
     return path.join($.temporaryFolder, './resumable-'+identifier+'.'+chunkNumber);
   }
-
+  // Make sure this chunk was valid
   var validateRequest = function(chunkNumber, chunkSize, totalSize, identifier, filename, fileSize){
     // Clean up the identifier
     identifier = cleanIdentifier(identifier);
@@ -56,7 +64,6 @@ module.exports = resumable = function(temporaryFolder){
         return 'invalid_resumable_request5';
       }
     }
-
     return 'valid';
   }
 
@@ -83,56 +90,53 @@ module.exports = resumable = function(temporaryFolder){
     }
   }
 
-  //'partly_done', filename, original_filename, identifier, chunksReceived, totalNumberOfChunks
-  //'done', filename, original_filename, identifier, chunksReceived, totalNumberOfChunks
+  //'partly_done', filename, original_filename, identifier
+  //'done', filename, original_filename, identifier, totalNumberOfChunks
   //'invalid_resumable_request', null, null, null
   //'non_resumable_request', null, null, null
   $.post = function(req, callback){
 
-    var fields = req.body;
-    var files = req.files;
+    var fields = req.body,
+      files = req.files,
+      chunkNumber = fields['resumableChunkNumber'],
+      chunkSize = fields['resumableChunkSize'],
+      totalSize = fields['resumableTotalSize'],
+      numberOfChunks = fields['resumableTotalChunks'],
+      identifier = cleanIdentifier(fields['resumableIdentifier']),
+      filename = fields['resumableFilename'],
+      original_filename = fields['resumableIdentifier'];
 
-    var chunkNumber = fields['resumableChunkNumber'];
-    var chunkSize = fields['resumableChunkSize'];
-    var totalSize = fields['resumableTotalSize'];
-    var identifier = cleanIdentifier(fields['resumableIdentifier']);
-    var filename = fields['resumableFilename'];
-
-		var original_filename = fields['resumableIdentifier'];
-
-    if(!files[$.fileParameterName] || !files[$.fileParameterName].size) {
+    if (!files[$.fileParameterName] || !files[$.fileParameterName].size) {
       callback('invalid_resumable_request', null, null, null);
       return;
     }
+    // Check if file chunk is valid
     var validation = validateRequest(chunkNumber, chunkSize, totalSize, identifier, files[$.fileParameterName].size);
-    if(validation=='valid') {
+    if (validation=='valid') {
+      // If we haven't started tracking this file yet
+      if (!$.fileTracker[identifier]) {
+        $.fileTracker[identifier] = [];
+      }
+      // Get chunk's file name (what it should be)
       var chunkFilename = getChunkFilename(chunkNumber, identifier);
-
       // Save the chunk (TODO: OVERWRITE)
-      fs.rename(files[$.fileParameterName].path, chunkFilename, function(){
-
-        // Do we have all the chunks?
-        var currentTestChunk = 1;
-        var numberOfChunks = Math.max(Math.floor(totalSize/(chunkSize*1.0)), 1);
-        var testChunkExists = function(){
-              fs.exists(getChunkFilename(currentTestChunk, identifier), function(exists){
-                if(exists){
-                  currentTestChunk++;
-                  if(currentTestChunk>numberOfChunks) {
-                    callback('done', filename, original_filename, identifier, (currentTestChunk -1), numberOfChunks);
-                  } else {
-                    // Recursion
-                    testChunkExists();
-                  }
-                } else {
-                  callback('partly_done', filename, original_filename, identifier, (currentTestChunk -1), numberOfChunks);
-                }
-              });
-            }
-        testChunkExists();
+      fs.rename(files[$.fileParameterName].path, chunkFilename, function() {
+        // Successfully savet his chunk, so mark it as such
+        $.fileTracker[identifier][chunkNumber] = true;
+        //console.log('Loaded ' + chunkNumber + ' out of ' + numberOfChunks);
+        // Loop through all chunks to see if they are all received (they may have come out of order)
+        for (var i=1; i <= numberOfChunks; i++) {
+          // If chunk upload failed
+          if (!$.fileTracker[identifier][i]) {
+            // If one failed then we are done.
+            return callback('partly_done', filename, original_filename, identifier);
+          }
+        }
+        // If we made it this far then they are all done
+        callback('done', filename, original_filename, identifier, numberOfChunks);
       });
     } else {
-          callback(validation, filename, original_filename, identifier);
+      callback(validation, filename, original_filename, identifier);
     }
   }
 
